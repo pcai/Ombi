@@ -48,9 +48,13 @@ namespace Ombi.Schedule.Jobs.Plex
                 }
                 await _notification.SendNotificationToAdmins("Plex Episode Sync Started");
 
+                // One key set for the whole sync run, shared by every batch
+                // and every server, so the episode key table is loaded once
+                // instead of once per batch of 150.
+                var existingEpisodeKeys = new HashSet<(string Key, string GrandparentKey)>();
                 foreach (var server in s.Servers)
                 {
-                    await Cache(server);
+                    await Cache(server, existingEpisodeKeys);
                 }
 
             }
@@ -67,7 +71,7 @@ namespace Ombi.Schedule.Jobs.Plex
             await _notification.SendNotificationToAdmins("Plex Episode Sync Finished");
         }
 
-        private async Task Cache(PlexServers settings)
+        private async Task Cache(PlexServers settings, HashSet<(string Key, string GrandparentKey)> existingEpisodeKeys)
         {
             if (!Validate(settings))
             {
@@ -100,12 +104,12 @@ namespace Ombi.Schedule.Jobs.Plex
                 }
 
                 // Get the episodes
-                await GetEpisodes(settings, section);
+                await GetEpisodes(settings, section, existingEpisodeKeys);
             }
 
         }
 
-        private async Task GetEpisodes(PlexServers settings, Directory section)
+        private async Task GetEpisodes(PlexServers settings, Directory section, HashSet<(string Key, string GrandparentKey)> existingEpisodeKeys)
         {
             var currentPosition = 0;
             var resultCount = settings.EpisodeBatchSize == 0 ? 150 : settings.EpisodeBatchSize;
@@ -119,7 +123,7 @@ namespace Ombi.Schedule.Jobs.Plex
             // 12.03.2017 - I think we should be able to match them now
             //await _repo.ExecuteSql("DELETE FROM PlexEpisode");
 
-            await ProcessEpsiodes(episodes?.MediaContainer?.Metadata ?? new Metadata[] { }, currentEpisodes);
+            await ProcessEpsiodes(episodes?.MediaContainer?.Metadata ?? new Metadata[] { }, currentEpisodes, existingEpisodeKeys);
             currentPosition += resultCount;
 
             while (currentPosition < episodes.MediaContainer.totalSize)
@@ -127,7 +131,7 @@ namespace Ombi.Schedule.Jobs.Plex
                 var ep = await _api.GetAllEpisodes(settings.PlexAuthToken, settings.FullUri, section.key, currentPosition,
                     resultCount);
 
-                await ProcessEpsiodes(ep?.MediaContainer?.Metadata ?? new Metadata[] { }, currentEpisodes);
+                await ProcessEpsiodes(ep?.MediaContainer?.Metadata ?? new Metadata[] { }, currentEpisodes, existingEpisodeKeys);
                 _log.LogInformation(LoggingEvents.PlexEpisodeCacher, $"Processed {resultCount} more episodes. Total Remaining {episodes.MediaContainer.totalSize - currentPosition}");
                 currentPosition += resultCount;
             }
@@ -137,21 +141,29 @@ namespace Ombi.Schedule.Jobs.Plex
             await _repo.SaveChangesAsync();
         }
 
-        public async Task<HashSet<PlexEpisode>> ProcessEpsiodes(Metadata[] episodes, IQueryable<PlexEpisode> currentEpisodes)
+        public async Task<HashSet<PlexEpisode>> ProcessEpsiodes(Metadata[] episodes, IQueryable<PlexEpisode> currentEpisodes, HashSet<(string Key, string GrandparentKey)> sharedKeys = null)
         {
             var ep = new HashSet<PlexEpisode>();
             try
             {
-                // One query for the keys, then in-memory lookups: the old
-                // code ran currentEpisodes.Any(...) per episode, which is
-                // a database query per episode (an N+1 over the whole
-                // episode library), and currentEpisodes is an IQueryable,
-                // not a materialized list. This keeps the same semantics
-                // (existence is judged against what is in the database
-                // when this batch starts; earlier batches have already
-                // been saved by AddRange below) with one key query per
-                // batch instead of one query per episode.
-                var existingKeys = (await currentEpisodes
+                // One query for the keys, then in-memory lookups: the
+                // original code ran currentEpisodes.Any(...) per episode,
+                // which is a database query per episode (an N+1 over the
+                // whole episode library). Loading the keys once per batch
+                // fixed that but still reloaded the whole key table every
+                // 150 episodes, so the cost grew with the square of the
+                // library size. The set is therefore loaded once per sync
+                // run and shared across batches: callers pass one set per
+                // run, and it is kept current below as batches save, so
+                // later batches see what earlier batches saved, exactly
+                // as the per-batch reload did. Without a shared set this
+                // still loads once for the call. This widens one
+                // pre-existing race window: another job's concurrent
+                // inserts are not seen until the next sync (the old code
+                // saw them at the next batch); there is no unique
+                // constraint on episode keys, so the worst case is a
+                // duplicate row, not a failed sync.
+                var existingKeys = sharedKeys ?? (await currentEpisodes
                     .Select(x => new { x.Key, x.GrandparentKey })
                     .ToListAsync())
                     .Select(x => (x.Key, x.GrandparentKey))
@@ -208,6 +220,12 @@ namespace Ombi.Schedule.Jobs.Plex
                 }
 
                 await _repo.AddRange(ep);
+                // Keep the shared set current so later batches in this
+                // sync see what this batch saved.
+                foreach (var added in ep)
+                {
+                    existingKeys.Add((added.Key, added.GrandparentKey));
+                }
                 return ep;
             }
             catch (Exception e)

@@ -155,6 +155,10 @@ namespace Ombi.Schedule.Jobs.Plex
         private async Task<ProcessedContent> StartTheCache(PlexSettings plexSettings, bool recentlyAddedSearch)
         {
             var processedContent = new ProcessedContent();
+            // One episode key set for the whole sync run, shared by every
+            // show's episode batch, so the episode key table is loaded
+            // once instead of once per batch (see PlexEpisodeSync).
+            var existingEpisodeKeys = new HashSet<(string Key, string GrandparentKey)>();
             foreach (var servers in plexSettings.Servers ?? new List<PlexServers>())
             {
                 try
@@ -165,11 +169,11 @@ namespace Ombi.Schedule.Jobs.Plex
                     {
                         // If it's recently added search then we want the results to pass to the metadata job
                         // This way the metadata job is smaller in size to process, it only need to look at newly added shit
-                        return await ProcessServer(servers, true);
+                        return await ProcessServer(servers, true, existingEpisodeKeys);
                     }
                     else
                     {
-                        await ProcessServer(servers, false);
+                        await ProcessServer(servers, false, existingEpisodeKeys);
                     }
                 }
                 catch (Exception e)
@@ -181,7 +185,7 @@ namespace Ombi.Schedule.Jobs.Plex
             return processedContent;
         }
 
-        private async Task<ProcessedContent> ProcessServer(PlexServers servers, bool recentlyAddedSearch)
+        private async Task<ProcessedContent> ProcessServer(PlexServers servers, bool recentlyAddedSearch, HashSet<(string Key, string GrandparentKey)> existingEpisodeKeys)
         {
             var retVal = new ProcessedContent();
             var contentProcessed = new Dictionary<int, string>();
@@ -261,7 +265,7 @@ namespace Ombi.Schedule.Jobs.Plex
                     await Repo.SaveChangesAsync();
                     if (content.Metadata != null)
                     {
-                        var episodesAdded = await EpisodeSync.ProcessEpsiodes(content.Metadata, (IQueryable<PlexEpisode>)allEps);
+                        var episodesAdded = await EpisodeSync.ProcessEpsiodes(content.Metadata, (IQueryable<PlexEpisode>)allEps, existingEpisodeKeys);
                         episodesProcessed.AddRange(episodesAdded.Select(x => x.Id));
                     }
                 }
