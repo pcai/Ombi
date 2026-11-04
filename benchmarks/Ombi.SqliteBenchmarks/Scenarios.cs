@@ -143,7 +143,7 @@ public static class Scenarios
     // the last two can both fire). Batched: same mutations, one save at end.
     // Mirrors src/Ombi.Schedule/Jobs/Plex/PlexAvailabilityChecker.cs.
     public static Result AvailabilityPerItem(string dir) => Run(
-        "availability", "per-item SaveChanges (current Plex shape)", dir,
+        "availability", "per-item SaveChanges (pre-refactor Plex shape)", dir,
         ctx => { SeedMovies(ctx, MovieRows); },
         ctx =>
         {
@@ -191,7 +191,7 @@ public static class Scenarios
     // attaches an empty entity and marks only the changed property, in
     // both cases without loading the graph at all.
     public static Result WholeGraphUpdate(string dir) => Run(
-        "whole-graph-update", "Db.Update(detached graph) (current)", dir,
+        "whole-graph-update", "Db.Update(detached graph)", dir,
         ctx => { SeedTv(ctx, TvRoots); },
         ctx =>
         {
@@ -226,11 +226,12 @@ public static class Scenarios
         });
 
     // --- Scenario 3: RefreshMetadata shape -------------------------------
-    // Current code: SaveChangesAsync per movie/show across all six Start*
-    // methods, even when nothing changed. Mirrors
-    // src/Ombi.Schedule/Jobs/RefreshMetadata.cs (External DB).
+    // Pre-refactor code: SaveChangesAsync per movie/show across all six
+    // Start* methods, even when nothing changed. It now saves every 100
+    // items plus a final save per pass. Mirrors
+    // src/Ombi.Schedule/Jobs/Ombi/RefreshMetadata.cs (External DB).
     public static Result RefreshPerItem(string dir) => Run(
-        "refresh-metadata", "SaveChanges per item (current)", dir,
+        "refresh-metadata", "SaveChanges per item (pre-refactor)", dir,
         ctx => { SeedContent(ctx, ContentRows); },
         ctx =>
         {
@@ -291,8 +292,8 @@ public static class Scenarios
         // median meaningfully); the busy count is the headline number.
         return new Result("contention",
             config == Config.Baseline
-                ? "DELETE + busy_timeout 0 (current)"
-                : "WAL + busy_timeout 5000 (proposed)",
+                ? "DELETE + busy_timeout 0 (pre-refactor)"
+                : "WAL + busy_timeout 5000 + synchronous NORMAL",
             sw.Elapsed.TotalMilliseconds, new[] { sw.Elapsed.TotalMilliseconds },
             busy,
             $"{Writers} writers x {WritesPerWriter} inserts, save per row",
@@ -330,7 +331,7 @@ public static class Scenarios
         }
         runs.Sort();
         return new Result("lookup",
-            indexed ? "indexed TheMovieDbId" : "no index (current)",
+            indexed ? "indexed TheMovieDbId" : "no index (pre-refactor)",
             runs[runs.Count / 2], runs.ToArray(), 0,
             $"{LookupQueries} point lookups over {LookupRows} rows",
             LookupQueries);

@@ -6,9 +6,9 @@
 // overwrites report.md/results.csv but never the dated baseline copy.
 //
 // Every scenario runs on a fresh SQLite file in a scratch directory under
-// --out (deleted and recreated per run), so results are not polluted by
-// previous runs or by the machine's own Ombi databases. Nothing here
-// touches a real Ombi installation.
+// --out (deleted at the end of a successful run), so results are not
+// polluted by previous runs or by the machine's own Ombi databases.
+// Nothing here touches a real Ombi installation.
 
 using System.Runtime.InteropServices;
 using Ombi.SqliteBenchmarks;
@@ -81,6 +81,14 @@ public static class Program
         File.WriteAllText(Path.Combine(outDir, "report.md"), Report(results));
         Console.WriteLine();
         Console.WriteLine($"Wrote {Path.Combine(outDir, "report.md")} and results.csv");
+        try
+        {
+            Directory.Delete(scratch, recursive: true);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"Could not delete scratch directory {scratch}: {e.Message}");
+        }
         return 0;
     }
 
@@ -96,15 +104,22 @@ public static class Program
             $"Run: {now}. Host: {RuntimeInformation.OSDescription}, {RuntimeInformation.ProcessArchitecture}, " +
             $".NET {Environment.Version}. Iterations: {Iterations} per scenario (warmup discarded, median reported).",
             "",
-            "Pattern scenarios (availability, whole-graph-update, refresh-metadata, lookup) run under the " +
-            "current baseline SQLite configuration (DELETE journal, busy_timeout 0) so the pattern effect " +
+            "Pattern scenarios (availability, whole-graph-update, refresh-metadata, lookup) run under a " +
+            "fixed pre-refactor SQLite configuration (DELETE journal, busy_timeout 0) so the pattern effect " +
             "is measured separately from the configuration effect. Only `contention` compares configurations.",
             "",
             "Absolute milliseconds on this host are inflated by slow fsync (each SQLite transaction " +
             "commit costs ~80 ms on this VM's disk); the ratios between variants and the busy counts " +
             "are the signal, not the absolute numbers. `Rows written` is the sum of EF Core " +
             "SaveChanges return values: for whole-graph-update it shows how many rows a one-field " +
-            "change rewrites.",
+            "change rewrites. These are worst-case pattern measurements, not job runtimes: the " +
+            "availability scenario matches all 500 movies and saves up to three times per movie (the " +
+            "real code saved at most twice, and only for matched movies); refresh-metadata excludes " +
+            "the network lookups the real job performs; and the contention pair mixes WAL with the " +
+            "per-commit fsync drop from synchronous NORMAL (which survives a process crash but can " +
+            "lose the last transactions on OS crash or power loss). Ratios vary by host (the lookup " +
+            "pair measured 13.3x on Linux and 3.7x on Windows), so compare runs on the same host; " +
+            "the Host line above records this run's host.",
             "",
             "| Scenario | Variant | Median (ms) | Runs (ms) | SQLITE_BUSY | Rows written | Notes |",
             "|---|---|---|---|---|---|---|",
@@ -116,11 +131,11 @@ public static class Program
         lines.Add("");
         foreach (var pair in new[]
         {
-            ("availability", "Per-item SaveChanges is the current PlexAvailabilityChecker shape; the batched variant is the Emby/Jellyfin shape (mutate in loop, one save at end)."),
-            ("whole-graph-update", "Db.Update on a loaded TV graph is what TvRequestRepository.Update does today; the stub variant marks only the changed property, as MarkAsAvailable already does in-repo."),
-            ("refresh-metadata", "Per-item SaveChanges is the current RefreshMetadata shape on the External DB; the batched variant saves once per media type."),
-            ("contention", "Same parallel-writer workload under the current config vs WAL + busy_timeout 5000. The busy count, not just the time, is the headline: a busy error in production is a failed save or a swallowed update (cf. PR #5458)."),
-            ("lookup", "Point lookups by TheMovieDbId over 20,000 content rows, with and without an index on the lookup key. Current snapshots do not index these keys."),
+            ("availability", "Per-item SaveChanges was the PlexAvailabilityChecker shape before batching; the batched variant is the shape all three availability checkers now use (mutate in loop, one save at end)."),
+            ("whole-graph-update", "Db.Update on a detached TV graph is what TvRequestRepository.Update does for detached callers; the stub variant marks only the changed property, as MarkAsAvailable already does in-repo."),
+            ("refresh-metadata", "Per-item SaveChanges was the RefreshMetadata shape on the External DB; the batched variant saves every 100 items plus a final save per pass."),
+            ("contention", "Same parallel-writer workload under the pre-refactor config vs WAL + busy_timeout 5000 + synchronous NORMAL. The busy count, not just the time, is the headline: a busy error in production is a failed save or a swallowed update (cf. PR #5458)."),
+            ("lookup", "Point lookups by TheMovieDbId over 20,000 content rows, with and without an index on the lookup key. The indexed variant is the shape the lookup-index migration provides."),
         })
         {
             var a = results.FirstOrDefault(r => r.Scenario == pair.Item1);

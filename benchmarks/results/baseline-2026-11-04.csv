@@ -1,0 +1,11 @@
+scenario,variant,median_ms,runs_ms,busy_errors,rows_written,notes
+availability,per-item SaveChanges (pre-refactor Plex shape),132309.3,"129992.8;132309.3;138152.0",0,1500,
+availability,one SaveChanges at end,119.5,"111.1;119.5;134.1",0,500,
+whole-graph-update,Db.Update(detached graph),1741.4,"1738.4;1741.4;1969.6",0,1120,
+whole-graph-update,stub + IsModified on one property,1860.6,"1792.7;1860.6;1943.8",0,20,
+refresh-metadata,SaveChanges per item (pre-refactor),45278.8,"43573.5;45278.8;46042.3",0,500,
+refresh-metadata,one SaveChanges at end,116.0,"115.3;116.0;140.6",0,500,
+contention,DELETE + busy_timeout 0 (pre-refactor),67170.3,"67170.3",3,797,"4 writers x 200 inserts, save per row"
+contention,WAL + busy_timeout 5000 + synchronous NORMAL,3035.1,"3035.1",0,800,"4 writers x 200 inserts, save per row"
+lookup,no index (pre-refactor),547.2,"534.5;547.2;662.6",0,1000,1000 point lookups over 20000 rows
+lookup,indexed TheMovieDbId,47.4,"46.4;47.4;61.1",0,1000,1000 point lookups over 20000 rows

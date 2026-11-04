@@ -28,7 +28,8 @@ Options:
 - `--out DIR` — where to write results, default `benchmarks/results`.
 
 A run writes `report.md` and `results.csv` to `--out`, plus a `scratch/`
-directory of throwaway database files (safe to delete at any time).
+directory of throwaway database files, deleted at the end of a
+successful run (safe to delete at any time).
 Each scenario run uses a fresh, uniquely named file, so runs never
 interfere with each other.
 
@@ -60,7 +61,10 @@ Three things matter, in this order:
 1. **The ratio between variants**, not the absolute milliseconds.
    Absolute times depend heavily on the host's disk: on a VM with slow
    fsync, one SQLite transaction commit can cost ~80 ms, which inflates
-   every per-item variant enormously. The ratio survives that.
+   every per-item variant enormously. The ratio is the signal, but it
+   varies by host too (the lookup pair measured 13.3x on Linux and 3.7x
+   on Windows), so compare runs on the same host; the report header
+   records the host.
 2. **`SQLITE_BUSY` count** (contention scenario). A busy error in
    production is a failed save or a swallowed update, so zero busy
    errors under the improved configuration is the headline there, ahead
@@ -72,25 +76,39 @@ Three things matter, in this order:
    differs by an order of magnitude.
 
 Pattern scenarios (`availability`, `whole-graph-update`,
-`refresh-metadata`, `lookup`) run under the baseline configuration
-(DELETE journal, busy_timeout 0) so the pattern effect is measured
-separately from the configuration effect. Only `contention` compares
-configurations. Contention is a single timed parallel run (parallel
-timing is not stable enough to median meaningfully).
+`refresh-metadata`, `lookup`) run under a fixed pre-refactor
+configuration (DELETE journal, busy_timeout 0) so the pattern effect
+is measured separately from the configuration effect. Only
+`contention` compares configurations. Contention is a single timed
+parallel run (parallel timing is not stable enough to median
+meaningfully).
+
+These are worst-case pattern measurements, not job runtimes: the
+availability scenario matches all 500 movies and saves up to three
+times per movie (the real code saved at most twice, and only for
+matched movies); refresh-metadata excludes the network lookups the
+real job performs; and the contention pair mixes WAL with the
+per-commit fsync drop from synchronous NORMAL (which survives a
+process crash but can lose the last transactions on OS crash or power
+loss).
 
 ## What is measured, and what it maps to in the app
 
-Each pair is "the pattern the code used to run" vs "the pattern it runs
-now" (the 2026-11 SQLite refactor). The harness keeps both variants so
-a future change can still be measured against the old shape.
+Each pair compares the pattern the code used to run before the
+2026-11 SQLite refactor with the improved pattern (for
+`whole-graph-update`, the detached-`Db.Update` shape is still what
+`TvRequestRepository.Update` does for detached callers; the stub is
+the pattern `MarkAsAvailable` already uses). The harness keeps both
+variants so a future change can still be measured against the old
+shape.
 
 | Scenario | Variants | Real code |
 |---|---|---|
 | `availability` | SaveChanges per movie (up to 3x) vs one save at end | `src/Ombi.Schedule/Jobs/Plex/PlexAvailabilityChecker.cs` — the old shape streamed an unmaterialized query and saved per movie. The Emby/Jellyfin checkers already did the batched shape, and Plex now matches them. |
 | `whole-graph-update` | `Db.Update(detached graph)` vs stub + `IsModified` on one property | `TvRequestRepository.Update` / `UpdateChild`. Two distinct costs, both real: same-scope callers (`UpdateRootPath`/`UpdateQualityProfile` load via `Get()` then `Update` in one scope) pay the full-graph *load* to change one field — EF marks only the root Modified there, which this harness verified (1 row per save in the tracked case). Detached callers pay the full-graph *rewrite*: `Db.Update` marks every reachable entity Modified. The stub pattern already exists in-repo (`MarkAsAvailable`, `MarkChildAsAvailable`) and avoids both. |
-| `refresh-metadata` | SaveChanges per item vs one save at end | `src/Ombi.Schedule/Jobs/Ombi/RefreshMetadata.cs` — the old shape saved per movie/show across all six `Start*` methods, on the External DB; it now saves once per pass. |
-| `contention` | Same parallel-writer workload under current config vs WAL + busy_timeout 5000 | The configuration in `src/Ombi/Extensions/DatabaseExtensions.cs` (`ConfigureSqlite`): the old shape was a bare `Data Source=...` — DELETE journal mode, busy_timeout 0, no retry — while the Postgres/MySQL branches get `EnableRetryOnFailure`. Several Quartz jobs write the same file with no mutual exclusion. |
-| `lookup` | Point lookup by `TheMovieDbId`, no index vs indexed | Snapshots index FKs and `RequestedUserId` but not the keys sync/availability code looks up by (`MovieRequests.TheMovieDbId`, `TvRequests.ExternalProviderId`, content `Key`/`ImdbId`/`TheMovieDbId`). See the lookup-index migration for the indexes the app now creates. |
+| `refresh-metadata` | SaveChanges per item vs one save at end | `src/Ombi.Schedule/Jobs/Ombi/RefreshMetadata.cs` — the old shape saved per movie/show across all six `Start*` methods, on the External DB; it now saves every 100 items plus a final save per pass. |
+| `contention` | Same parallel-writer workload under the pre-refactor config vs WAL + busy_timeout 5000 + synchronous NORMAL | The configuration in `src/Ombi/Extensions/DatabaseExtensions.cs` (`ConfigureSqlite`): the old shape was a bare `Data Source=...` — DELETE journal mode, busy_timeout 0, no retry — while the Postgres/MySQL branches get `EnableRetryOnFailure`. Several Quartz jobs write the same file with no mutual exclusion. |
+| `lookup` | Point lookup by `TheMovieDbId`, no index vs indexed | Before the refactor, snapshots indexed FKs and `RequestedUserId` but not the keys sync/availability code looks up by (`MovieRequests.TheMovieDbId`, `TvRequests.ExternalProviderId`, content `Key`/`ImdbId`/`TheMovieDbId`). The lookup-index migration added them, and a follow-up correction removed the Type index and three indexes that duplicated alternate-key unique constraints. |
 
 ## Adding a scenario
 
