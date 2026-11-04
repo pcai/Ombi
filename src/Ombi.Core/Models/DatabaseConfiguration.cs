@@ -13,9 +13,14 @@ public class DatabaseConfiguration
 
     public DatabaseConfiguration(string defaultSqlitePath)
     {
-        OmbiDatabase = new PerDatabaseConfiguration(SqliteDatabase, $"Data Source={Path.Combine(defaultSqlitePath, "Ombi.db")}");
-        SettingsDatabase = new PerDatabaseConfiguration(SqliteDatabase, $"Data Source={Path.Combine(defaultSqlitePath, "OmbiSettings.db")}");
-        ExternalDatabase = new PerDatabaseConfiguration(SqliteDatabase, $"Data Source={Path.Combine(defaultSqlitePath, "OmbiExternal.db")}");
+        // Default Timeout matches the 60-second command timeout the contexts
+        // set: EF's command timeout does not cover BeginTransaction, which
+        // uses DefaultTimeout (30 seconds by default) instead, so without
+        // this a contended multi-row save could time out at ~35 seconds
+        // despite the 60-second command timeout.
+        OmbiDatabase = new PerDatabaseConfiguration(SqliteDatabase, $"Data Source={Path.Combine(defaultSqlitePath, "Ombi.db")};Default Timeout=60");
+        SettingsDatabase = new PerDatabaseConfiguration(SqliteDatabase, $"Data Source={Path.Combine(defaultSqlitePath, "OmbiSettings.db")};Default Timeout=60");
+        ExternalDatabase = new PerDatabaseConfiguration(SqliteDatabase, $"Data Source={Path.Combine(defaultSqlitePath, "OmbiExternal.db")};Default Timeout=60");
     }
     public PerDatabaseConfiguration OmbiDatabase { get; set; }
     public PerDatabaseConfiguration SettingsDatabase { get; set; }

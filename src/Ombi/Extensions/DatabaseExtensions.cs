@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Data.Common;
 using System.IO;
 using System.Text;
@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -31,6 +33,8 @@ namespace Ombi.Extensions
         public const string SqliteDatabase = "Sqlite";
         public const string MySqlDatabase = "MySQL";
         public const string PostgresDatabase = "Postgres";
+
+        private static int _sqliteConfigured;
 
         public static void ConfigureDatabases(this IServiceCollection services, IHealthChecksBuilder hcBuilder)
         {
@@ -153,7 +157,13 @@ namespace Ombi.Extensions
         public static void ConfigureSqlite(DbContextOptionsBuilder options, PerDatabaseConfiguration config)
         {
             SQLitePCL.Batteries.Init();
-            SQLitePCL.raw.sqlite3_config(raw.SQLITE_CONFIG_MULTITHREAD);
+            // sqlite3_config only takes effect before SQLite initializes and
+            // is a no-op error afterwards, so call it once instead of on
+            // every options build; the result is not meaningful to check.
+            if (Interlocked.CompareExchange(ref _sqliteConfigured, 1, 0) == 0)
+            {
+                SQLitePCL.raw.sqlite3_config(raw.SQLITE_CONFIG_MULTITHREAD);
+            }
             options.UseSqlite(config.ConnectionString);
             options.AddInterceptors(new SqlitePragmasInterceptor());
         }
@@ -163,31 +173,65 @@ namespace Ombi.Extensions
         /// express: WAL journal mode, a busy timeout, and (only once WAL is
         /// confirmed) synchronous NORMAL. WAL and busy timeout are PRAGMAs,
         /// not connection-string keywords, so a user cannot set them through
-        /// database.json, and until now Ombi set neither: the default
-        /// DELETE journal mode plus busy_timeout 0 meant any overlap between
-        /// two writers was an instant SQLITE_BUSY. WAL is sticky per file
+        /// database.json, and until now Ombi set neither: the defaults were
+        /// DELETE journal mode and busy_timeout 0. Lock acquisition does
+        /// retry up to the busy timeout, so writers do not all fail
+        /// instantly; what contention runs actually showed was single-row
+        /// inserts failing to complete outside the driver's retry loop,
+        /// losing writes under DELETE journal. WAL is sticky per file
         /// once set; busy_timeout is per connection, so both are applied on
-        /// every connection open. This is deliberately best-effort: if the
-        /// file cannot use WAL (read-only file, network filesystem), the
-        /// connection still opens with today's behaviour rather than
-        /// failing every database operation.
+        /// every connection open. This is deliberately best-effort and
+        /// never fails the connection, but failures are logged, not
+        /// silent: WAL is unsupported on network filesystems, so if the
+        /// file cannot use WAL the connection keeps whatever journal mode
+        /// the file supports and synchronous stays at its default.
         /// </summary>
         private sealed class SqlitePragmasInterceptor : DbConnectionInterceptor
         {
             public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
             {
-                ApplyPragmas(connection);
+                ApplyPragmas(connection, eventData.Context);
                 base.ConnectionOpened(connection, eventData);
             }
 
             public override async Task ConnectionOpenedAsync(DbConnection connection, ConnectionEndEventData eventData, CancellationToken cancellationToken = default)
             {
-                ApplyPragmas(connection);
+                ApplyPragmas(connection, eventData.Context);
                 await base.ConnectionOpenedAsync(connection, eventData, cancellationToken);
             }
 
-            private static void ApplyPragmas(DbConnection connection)
+            public override InterceptionResult ConnectionClosing(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
             {
+                Optimize(connection);
+                return base.ConnectionClosing(connection, eventData, result);
+            }
+
+            public override async ValueTask<InterceptionResult> ConnectionClosingAsync(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
+            {
+                Optimize(connection);
+                return await base.ConnectionClosingAsync(connection, eventData, result);
+            }
+
+            private static ILogger LoggerFor(DbContext context)
+            {
+                try
+                {
+                    // Logging must never break the connection, so any
+                    // failure to resolve a logger degrades to silent.
+                    return context == null
+                        ? null
+                        : ((IInfrastructure<IServiceProvider>)context).Instance.GetService<ILoggerFactory>()
+                            ?.CreateLogger<SqlitePragmasInterceptor>();
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            private static void ApplyPragmas(DbConnection connection, DbContext context)
+            {
+                var logger = LoggerFor(context);
                 try
                 {
                     using var command = connection.CreateCommand();
@@ -206,11 +250,36 @@ namespace Ombi.Extensions
                         command.CommandText = "PRAGMA synchronous=NORMAL;";
                         command.ExecuteNonQuery();
                     }
+                    else
+                    {
+                        logger?.LogWarning(
+                            "SQLite journal mode is '{Mode}' instead of WAL for {DataSource}; "
+                            + "WAL is unsupported on network filesystems, so this database keeps its existing mode",
+                            mode, connection.DataSource);
+                    }
                 }
-                catch (DbException)
+                catch (DbException e)
                 {
                     // Best-effort: see the class comment. A pragma failure
                     // must not take down the connection that needed it.
+                    logger?.LogWarning(e, "SQLite pragmas could not be applied to {DataSource}", connection.DataSource);
+                }
+            }
+
+            private static void Optimize(DbConnection connection)
+            {
+                // Keep planner statistics fresh so index choices do not go
+                // stale as tables grow; PRAGMA optimize is designed to run
+                // on close and does real work only when statistics are
+                // missing or outdated. Best-effort like ApplyPragmas.
+                try
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "PRAGMA optimize;";
+                    command.ExecuteNonQuery();
+                }
+                catch (DbException)
+                {
                 }
             }
         }
