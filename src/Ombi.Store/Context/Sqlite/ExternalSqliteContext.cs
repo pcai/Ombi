@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -6,16 +7,22 @@ namespace Ombi.Store.Context.Sqlite
 {
     public sealed class ExternalSqliteContext : ExternalContext
     {
-        private static bool _created;
+        private static int _migrated;
         public ExternalSqliteContext(DbContextOptions<ExternalSqliteContext> options) : base(options)
         {
-            if (_created) return;
-
-            _created = true;
-            Upgrade();
+            // Command timeout is per-context-instance state, so it must be
+            // set on every construction. The old code set it only on the
+            // first constructed context (guarded by a static flag shared
+            // with migration), leaving every later context on the provider
+            // default. Migration itself still runs only once, now guarded
+            // atomically: contexts are constructed on several threads
+            // (HTTP + Quartz pool) and a plain bool check-then-set races.
             Database.SetCommandTimeout(60);
-
-            Database.Migrate();
+            if (Interlocked.CompareExchange(ref _migrated, 1, 0) == 0)
+            {
+                Upgrade();
+                Database.Migrate();
+            }
 
         }
 
