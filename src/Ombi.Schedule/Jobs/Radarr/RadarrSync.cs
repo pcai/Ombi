@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -69,7 +70,13 @@ namespace Ombi.Schedule.Jobs.Radarr
                 try
                 {
                     var movies = await _api.GetMovies(settings.ApiKey, settings.FullUri);
-                    var existingMovies = _radarrRepo.GetAll();
+                    // One query, not one per movie: the old code ran
+                    // FirstOrDefaultAsync inside the loop below (an N+1
+                    // over the whole Radarr library). First() per key
+                    // preserves the old behaviour for duplicate TMDB ids.
+                    var existingMovies = (await _radarrRepo.GetAll().ToListAsync())
+                        .GroupBy(x => x.TheMovieDbId)
+                        .ToDictionary(g => g.Key, g => g.First());
                     if (movies != null)
                     {
                         _logger.LogInformation($"[RadarrSync] Retrieved {movies.Count} movies from Radarr");
@@ -88,7 +95,7 @@ namespace Ombi.Schedule.Jobs.Radarr
                                     var is4k = m.movieFile?.quality?.quality?.resolution >= 2160;
 
                                     // Do we have a cached movie for this already?
-                                    var existing = await existingMovies.FirstOrDefaultAsync(x => x.TheMovieDbId == m.tmdbId);
+                                    existingMovies.TryGetValue(m.tmdbId, out var existing);
                                     if (existing != null)
                                     {
                                         existing.Has4K = is4k;

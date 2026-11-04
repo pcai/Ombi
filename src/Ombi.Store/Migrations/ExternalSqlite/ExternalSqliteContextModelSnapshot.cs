@@ -72,6 +72,10 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+                    b.HasIndex("EmbyId");
+                    b.HasIndex("ImdbId");
+                    b.HasIndex("TheMovieDbId");
+                    b.HasIndex("TvDbId");
 
                     b.ToTable("EmbyContent");
                 });
@@ -160,6 +164,10 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+                    b.HasIndex("JellyfinId");
+                    b.HasIndex("ImdbId");
+                    b.HasIndex("TheMovieDbId");
+                    b.HasIndex("TvDbId");
 
                     b.ToTable("JellyfinContent");
                 });
@@ -238,6 +246,8 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+                    b.HasIndex("ArtistId");
+                    b.HasIndex("ForeignAlbumId");
 
                     b.ToTable("LidarrAlbumCache");
                 });
@@ -261,6 +271,8 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+                    b.HasIndex("ArtistId");
+                    b.HasIndex("ForeignArtistId");
 
                     b.ToTable("LidarrArtistCache");
                 });
@@ -292,6 +304,7 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                     b.HasKey("Id");
 
                     b.HasIndex("GrandparentKey");
+                    b.HasIndex("GrandparentKey", "Key");
 
                     b.ToTable("PlexEpisode");
                 });
@@ -368,6 +381,11 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+                    b.HasIndex("Key");
+                    b.HasIndex("ImdbId");
+                    b.HasIndex("TheMovieDbId");
+                    b.HasIndex("TvDbId");
+                    b.HasIndex("Type");
 
                     b.ToTable("PlexServerContent");
                 });
@@ -414,6 +432,7 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+                    b.HasIndex("TheMovieDbId");
 
                     b.ToTable("RadarrCache");
                 });
@@ -465,6 +484,8 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+                    b.HasIndex("TvDbId");
+                    b.HasIndex("TheMovieDbId");
 
                     b.ToTable("SonarrCache");
                 });
@@ -491,6 +512,7 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+                    b.HasIndex("TvDbId", "SeasonNumber", "EpisodeNumber");
 
                     b.ToTable("SonarrEpisodeCache");
                 });
@@ -514,6 +536,7 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+                    b.HasIndex("TheMovieDbId");
 
                     b.ToTable("UserPlayedEpisode");
                 });
@@ -531,6 +554,7 @@ namespace Ombi.Store.Migrations.ExternalSqlite
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+                    b.HasIndex("TheMovieDbId");
 
                     b.ToTable("UserPlayedMovie");
                 });

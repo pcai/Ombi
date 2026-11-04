@@ -142,6 +142,21 @@ namespace Ombi.Schedule.Jobs.Plex
             var ep = new HashSet<PlexEpisode>();
             try
             {
+                // One query for the keys, then in-memory lookups: the old
+                // code ran currentEpisodes.Any(...) per episode, which is
+                // a database query per episode (an N+1 over the whole
+                // episode library), and currentEpisodes is an IQueryable,
+                // not a materialized list. This keeps the same semantics
+                // (existence is judged against what is in the database
+                // when this batch starts; earlier batches have already
+                // been saved by AddRange below) with one key query per
+                // batch instead of one query per episode.
+                var existingKeys = (await currentEpisodes
+                    .Select(x => new { x.Key, x.GrandparentKey })
+                    .ToListAsync())
+                    .Select(x => (x.Key, x.GrandparentKey))
+                    .ToHashSet();
+
                 foreach (var episode in episodes)
                 {
                     // I don't think we need to get the metadata, we only need to get the metadata if we need the provider id (TheTvDbid). Why do we need it for episodes?
@@ -149,8 +164,7 @@ namespace Ombi.Schedule.Jobs.Plex
                     //var metadata = _api.GetEpisodeMetaData(server.PlexAuthToken, server.FullUri, episode.ratingKey);
 
                     // This does seem to work, it looks like we can somehow get different rating, grandparent and parent keys with episodes. Not sure how.
-                    var epExists = currentEpisodes.Any(x => episode.ratingKey == x.Key &&
-                                                              episode.grandparentRatingKey == x.GrandparentKey);
+                    var epExists = existingKeys.Contains((episode.ratingKey, episode.grandparentRatingKey));
                     if (epExists)
                     {
                         continue;

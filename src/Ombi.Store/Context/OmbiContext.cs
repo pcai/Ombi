@@ -53,6 +53,24 @@ namespace Ombi.Store.Context
             builder.Entity<PlexWatchlistUserStatus>()
                 .HasIndex(x => x.UserId)
                 .IsUnique();
+            // Indexes on the keys request code looks up by. Without them
+            // every duplicate-request check is a full table scan: these
+            // columns are the lookup keys, not foreign keys, so EF creates
+            // no index for them by convention.
+            builder.Entity<MovieRequests>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<MovieRequests>()
+                .HasIndex(x => x.ImdbId);
+            builder.Entity<TvRequests>()
+                .HasIndex(x => x.TvDbId);
+            builder.Entity<TvRequests>()
+                .HasIndex(x => x.ExternalProviderId);
+            builder.Entity<TvRequests>()
+                .HasIndex(x => x.ImdbId);
+            builder.Entity<AlbumRequest>()
+                .HasIndex(x => x.ForeignAlbumId);
+            builder.Entity<AlbumRequest>()
+                .HasIndex(x => x.ForeignArtistId);
         }
 
 

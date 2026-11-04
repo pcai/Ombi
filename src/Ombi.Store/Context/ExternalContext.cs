@@ -63,6 +63,63 @@ namespace Ombi.Store.Context
                 .HasPrincipalKey(x => x.JellyfinId)
                 .HasForeignKey(p => p.ParentId);
 
+            // Indexes on the keys sync and availability code looks up by.
+            // These columns are not foreign keys, so EF creates no index
+            // for them by convention, and every point lookup on them is a
+            // full table scan over a table that grows with library size.
+            builder.Entity<PlexServerContent>()
+                .HasIndex(x => x.Key);
+            builder.Entity<PlexServerContent>()
+                .HasIndex(x => x.ImdbId);
+            builder.Entity<PlexServerContent>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<PlexServerContent>()
+                .HasIndex(x => x.TvDbId);
+            builder.Entity<PlexServerContent>()
+                .HasIndex(x => x.Type);
+            // The per-episode existence check filters on both columns.
+            builder.Entity<PlexEpisode>()
+                .HasIndex(x => new { x.GrandparentKey, x.Key });
+            builder.Entity<EmbyContent>()
+                .HasIndex(x => x.EmbyId);
+            builder.Entity<EmbyContent>()
+                .HasIndex(x => x.ImdbId);
+            builder.Entity<EmbyContent>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<EmbyContent>()
+                .HasIndex(x => x.TvDbId);
+            builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.JellyfinId);
+            builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.ImdbId);
+            builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.TvDbId);
+            builder.Entity<RadarrCache>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<SonarrCache>()
+                .HasIndex(x => x.TvDbId);
+            builder.Entity<SonarrCache>()
+                .HasIndex(x => x.TheMovieDbId);
+            // The per-episode availability check filters on all three.
+            builder.Entity<SonarrEpisodeCache>()
+                .HasIndex(x => new { x.TvDbId, x.SeasonNumber, x.EpisodeNumber });
+            builder.Entity<LidarrArtistCache>()
+                .HasIndex(x => x.ArtistId);
+            builder.Entity<LidarrArtistCache>()
+                .HasIndex(x => x.ForeignArtistId);
+            builder.Entity<LidarrAlbumCache>()
+                .HasIndex(x => x.ArtistId);
+            builder.Entity<LidarrAlbumCache>()
+                .HasIndex(x => x.ForeignAlbumId);
+            // Played lookups filter on TheMovieDbId (the UserId filter
+            // happens in memory over that result).
+            builder.Entity<UserPlayedMovie>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<UserPlayedEpisode>()
+                .HasIndex(x => x.TheMovieDbId);
+
             base.OnModelCreating(builder);
         }
     }

@@ -502,6 +502,8 @@ namespace Ombi.Store.Migrations.OmbiSqlite
                     b.HasKey("Id");
 
                     b.HasIndex("RequestedUserId");
+                    b.HasIndex("ForeignAlbumId");
+                    b.HasIndex("ForeignArtistId");
 
                     b.ToTable("AlbumRequests");
                 });
@@ -774,6 +776,8 @@ namespace Ombi.Store.Migrations.OmbiSqlite
                     b.HasKey("Id");
 
                     b.HasIndex("RequestedUserId");
+                    b.HasIndex("TheMovieDbId");
+                    b.HasIndex("ImdbId");
 
                     b.ToTable("MovieRequests");
                 });
@@ -852,6 +856,9 @@ namespace Ombi.Store.Migrations.OmbiSqlite
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+                    b.HasIndex("TvDbId");
+                    b.HasIndex("ExternalProviderId");
+                    b.HasIndex("ImdbId");
 
                     b.ToTable("TvRequests");
                 });
