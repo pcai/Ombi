@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Intentionally NOT added to Ombi.sln: this is a developer tool, not a
+         shipped component, so the main build and test runs stay unaffected. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same EF Core SQLite version as Ombi.Store, so numbers are comparable
+         to what the app actually runs. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.5" />
+  </ItemGroup>
+
+</Project>

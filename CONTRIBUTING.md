@@ -147,6 +147,10 @@ yarn --cwd ./src/Ombi/ClientApp test
 yarn --cwd ./tests cypress:run
 ```
 
+For SQLite performance work, there is also a standalone benchmark harness
+(not part of the solution, not shipped) with its own instructions in
+`benchmarks/Ombi.SqliteBenchmarks/README.md`.
+
 ### Test Requirements
 - New features must include tests
 - Bug fixes should include regression tests
