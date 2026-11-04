@@ -95,7 +95,15 @@ namespace Ombi.Store.Repository
 
         public override void UpdateWithoutSave(IMediaServerContent existingContent)
         {
-            Db.JellyfinContent.Update((JellyfinContent)existingContent);
+            var entity = (JellyfinContent)existingContent;
+            // An already-tracked entity carries its own mutations, so
+            // Update would only force every column into the UPDATE.
+            // Skip it for tracked entities and let SaveChanges write the
+            // dirty columns; detached entities still take the Update path.
+            if (Db.Entry(entity).State == EntityState.Detached)
+            {
+                Db.JellyfinContent.Update(entity);
+            }
         }
 
         public override Task UpdateRange(IEnumerable<IMediaServerContent> existingContent)

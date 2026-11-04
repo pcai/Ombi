@@ -68,20 +68,15 @@ namespace Ombi.Store.Context
             // for them by convention, and every point lookup on them is a
             // full table scan over a table that grows with library size.
             builder.Entity<PlexServerContent>()
-                .HasIndex(x => x.Key);
-            builder.Entity<PlexServerContent>()
                 .HasIndex(x => x.ImdbId);
             builder.Entity<PlexServerContent>()
                 .HasIndex(x => x.TheMovieDbId);
             builder.Entity<PlexServerContent>()
                 .HasIndex(x => x.TvDbId);
+            // PlexContentSync matches movies and shows on Title,
+            // ReleaseYear and Type when it cannot match on the key.
             builder.Entity<PlexServerContent>()
-                .HasIndex(x => x.Type);
-            // The per-episode existence check filters on both columns.
-            builder.Entity<PlexEpisode>()
-                .HasIndex(x => new { x.GrandparentKey, x.Key });
-            builder.Entity<EmbyContent>()
-                .HasIndex(x => x.EmbyId);
+                .HasIndex(x => new { x.Title, x.ReleaseYear, x.Type });
             builder.Entity<EmbyContent>()
                 .HasIndex(x => x.ImdbId);
             builder.Entity<EmbyContent>()
@@ -89,13 +84,14 @@ namespace Ombi.Store.Context
             builder.Entity<EmbyContent>()
                 .HasIndex(x => x.TvDbId);
             builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.ImdbId);
+            builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.TheMovieDbId);
+            builder.Entity<JellyfinContent>()
+                .HasIndex(x => x.TvDbId);
+            // JellyfinEpisodeSync looks up episodes by JellyfinId per episode.
+            builder.Entity<JellyfinEpisode>()
                 .HasIndex(x => x.JellyfinId);
-            builder.Entity<JellyfinContent>()
-                .HasIndex(x => x.ImdbId);
-            builder.Entity<JellyfinContent>()
-                .HasIndex(x => x.TheMovieDbId);
-            builder.Entity<JellyfinContent>()
-                .HasIndex(x => x.TvDbId);
             builder.Entity<RadarrCache>()
                 .HasIndex(x => x.TheMovieDbId);
             builder.Entity<SonarrCache>()
