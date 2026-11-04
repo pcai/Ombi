@@ -65,6 +65,12 @@ namespace Ombi.Schedule.Jobs.Ombi
         private readonly IMediaCacheService _mediaCacheService;
         private readonly IPlexApi _plexApi;
 
+        // Saves during a pass happen every N items, so one bad item or a
+        // restart never discards the whole pass. Network lookups dominate
+        // the pass, so 100 is cheap insurance; it bounds the loss to 100
+        // items' lookups.
+        private const int SaveBatchSize = 100;
+
         private IEmbyApi EmbyApi { get; set; }
         private IJellyfinApi JellyfinApi { get; set; }
 
@@ -142,306 +148,389 @@ namespace Ombi.Schedule.Jobs.Ombi
 
         private async Task StartPlexTv(List<PlexServerContent> allTv)
         {
+            var processed = 0;
             foreach (var show in allTv)
             {
-                // Just double check there is no associated request id
-                if (show.RequestId.HasValue)
+                try
                 {
-                    continue;
-                }
-                var hasImdb = show.ImdbId.HasValue();
-                var hasTheMovieDb = show.TheMovieDbId.HasValue();
-                var hasTvDbId = show.TvDbId.HasValue();
+                    // Just double check there is no associated request id
+                    if (show.RequestId.HasValue)
+                    {
+                        continue;
+                    }
+                    var hasImdb = show.ImdbId.HasValue();
+                    var hasTheMovieDb = show.TheMovieDbId.HasValue();
+                    var hasTvDbId = show.TvDbId.HasValue();
 
-                if (!hasTheMovieDb)
-                {
-                    var id = await GetTheMovieDbId(hasTvDbId, hasImdb, show.TvDbId, show.ImdbId, show.Title, false);
-                    show.TheMovieDbId = id;
-                }
+                    if (!hasTheMovieDb)
+                    {
+                        var id = await GetTheMovieDbId(hasTvDbId, hasImdb, show.TvDbId, show.ImdbId, show.Title, false);
+                        show.TheMovieDbId = id;
+                    }
 
-                if (!hasImdb)
-                {
-                    var id = await GetImdbId(hasTheMovieDb, hasTvDbId, show.Title, show.TheMovieDbId, show.TvDbId, RequestType.TvShow);
-                    show.ImdbId = id;
-                    _plexRepo.UpdateWithoutSave(show);
-                }
+                    if (!hasImdb)
+                    {
+                        var id = await GetImdbId(hasTheMovieDb, hasTvDbId, show.Title, show.TheMovieDbId, show.TvDbId, RequestType.TvShow);
+                        show.ImdbId = id;
+                        _plexRepo.UpdateWithoutSave(show);
+                    }
 
-                if (!hasTvDbId)
+                    if (!hasTvDbId)
+                    {
+                        var id = await GetTvDbId(hasTheMovieDb, hasImdb, show.TheMovieDbId, show.ImdbId, show.Title);
+                        show.TvDbId = id;
+                        _plexRepo.UpdateWithoutSave(show);
+                    }
+                }
+                catch (Exception e)
                 {
-                    var id = await GetTvDbId(hasTheMovieDb, hasImdb, show.TheMovieDbId, show.ImdbId, show.Title);
-                    show.TvDbId = id;
-                    _plexRepo.UpdateWithoutSave(show);
+                    _log.LogWarning(e, "Skipping metadata refresh for '{Title}' after an error; continuing with the rest of the pass", show.Title);
+                }
+                if (++processed % SaveBatchSize == 0)
+                {
+                    await _plexRepo.SaveChangesAsync();
                 }
             }
-            // One save for the whole pass instead of one per show. The
-            // network lookups above already happened outside any
-            // transaction; only this save opens one.
+            // Saves happen every N items during the pass plus this final
+            // one, so one bad item or a restart never discards the whole
+            // pass. The network lookups above already happened outside any
+            // transaction; each save opens only a short one.
             await _plexRepo.SaveChangesAsync();
         }
 
         private async Task StartEmbyTv()
         {
+            var processed = 0;
             var allTv = await _embyRepo.GetAll().Where(x =>
                 x.Type == MediaType.Series && (x.TheMovieDbId == null || x.ImdbId == null || x.TvDbId == null)).ToListAsync();
 
             foreach (var show in allTv)
             {
-                var hasImdb = show.ImdbId.HasValue();
-                var hasTheMovieDb = show.TheMovieDbId.HasValue();
-                var hasTvDbId = show.TvDbId.HasValue();
-
-                if (!hasTheMovieDb)
+                try
                 {
-                    var id = await GetTheMovieDbId(hasTvDbId, hasImdb, show.TvDbId, show.ImdbId, show.Title, false);
-                    show.TheMovieDbId = id;
+                    var hasImdb = show.ImdbId.HasValue();
+                    var hasTheMovieDb = show.TheMovieDbId.HasValue();
+                    var hasTvDbId = show.TvDbId.HasValue();
+
+                    if (!hasTheMovieDb)
+                    {
+                        var id = await GetTheMovieDbId(hasTvDbId, hasImdb, show.TvDbId, show.ImdbId, show.Title, false);
+                        show.TheMovieDbId = id;
+                    }
+
+                    if (!hasImdb)
+                    {
+                        var id = await GetImdbId(hasTheMovieDb, hasTvDbId, show.Title, show.TheMovieDbId, show.TvDbId, RequestType.TvShow);
+                        show.ImdbId = id;
+                        _embyRepo.UpdateWithoutSave(show);
+                    }
+
+                    if (!hasTvDbId)
+                    {
+                        var id = await GetTvDbId(hasTheMovieDb, hasImdb, show.TheMovieDbId, show.ImdbId, show.Title);
+                        show.TvDbId = id;
+                        _embyRepo.UpdateWithoutSave(show);
+                    }
                 }
-
-                if (!hasImdb)
+                catch (Exception e)
                 {
-                    var id = await GetImdbId(hasTheMovieDb, hasTvDbId, show.Title, show.TheMovieDbId, show.TvDbId, RequestType.TvShow);
-                    show.ImdbId = id;
-                    _embyRepo.UpdateWithoutSave(show);
+                    _log.LogWarning(e, "Skipping metadata refresh for '{Title}' after an error; continuing with the rest of the pass", show.Title);
                 }
-
-                if (!hasTvDbId)
+                if (++processed % SaveBatchSize == 0)
                 {
-                    var id = await GetTvDbId(hasTheMovieDb, hasImdb, show.TheMovieDbId, show.ImdbId, show.Title);
-                    show.TvDbId = id;
-                    _embyRepo.UpdateWithoutSave(show);
+                    await _embyRepo.SaveChangesAsync();
                 }
             }
-            // One save for the whole pass instead of one per show.
+            // Saves happen every N items during the pass plus this final
+            // one, so one bad item or a restart never discards the whole
+            // pass.
             await _embyRepo.SaveChangesAsync();
         }
 
         private async Task StartJellyfinTv()
         {
+            var processed = 0;
             var allTv = await _jellyfinRepo.GetAll().Where(x =>
                 x.Type == MediaType.Series && (x.TheMovieDbId == null || x.ImdbId == null || x.TvDbId == null)).ToListAsync();
 
             foreach (var show in allTv)
             {
-                var hasImdb = show.ImdbId.HasValue();
-                var hasTheMovieDb = show.TheMovieDbId.HasValue();
-                var hasTvDbId = show.TvDbId.HasValue();
-
-                if (!hasTheMovieDb)
+                try
                 {
-                    var id = await GetTheMovieDbId(hasTvDbId, hasImdb, show.TvDbId, show.ImdbId, show.Title, false);
-                    show.TheMovieDbId = id;
+                    var hasImdb = show.ImdbId.HasValue();
+                    var hasTheMovieDb = show.TheMovieDbId.HasValue();
+                    var hasTvDbId = show.TvDbId.HasValue();
+
+                    if (!hasTheMovieDb)
+                    {
+                        var id = await GetTheMovieDbId(hasTvDbId, hasImdb, show.TvDbId, show.ImdbId, show.Title, false);
+                        show.TheMovieDbId = id;
+                    }
+
+                    if (!hasImdb)
+                    {
+                        var id = await GetImdbId(hasTheMovieDb, hasTvDbId, show.Title, show.TheMovieDbId, show.TvDbId, RequestType.TvShow);
+                        show.ImdbId = id;
+                        _jellyfinRepo.UpdateWithoutSave(show);
+                    }
+
+                    if (!hasTvDbId)
+                    {
+                        var id = await GetTvDbId(hasTheMovieDb, hasImdb, show.TheMovieDbId, show.ImdbId, show.Title);
+                        show.TvDbId = id;
+                        _jellyfinRepo.UpdateWithoutSave(show);
+                    }
                 }
-
-                if (!hasImdb)
+                catch (Exception e)
                 {
-                    var id = await GetImdbId(hasTheMovieDb, hasTvDbId, show.Title, show.TheMovieDbId, show.TvDbId, RequestType.TvShow);
-                    show.ImdbId = id;
-                    _jellyfinRepo.UpdateWithoutSave(show);
+                    _log.LogWarning(e, "Skipping metadata refresh for '{Title}' after an error; continuing with the rest of the pass", show.Title);
                 }
-
-                if (!hasTvDbId)
+                if (++processed % SaveBatchSize == 0)
                 {
-                    var id = await GetTvDbId(hasTheMovieDb, hasImdb, show.TheMovieDbId, show.ImdbId, show.Title);
-                    show.TvDbId = id;
-                    _jellyfinRepo.UpdateWithoutSave(show);
+                    await _jellyfinRepo.SaveChangesAsync();
                 }
             }
-            // One save for the whole pass instead of one per show.
+            // Saves happen every N items during the pass plus this final
+            // one, so one bad item or a restart never discards the whole
+            // pass.
             await _jellyfinRepo.SaveChangesAsync();
         }
 
         private async Task StartPlexMovies(List<PlexServerContent> allMovies, PlexSettings settings)
         {
+            var processed = 0;
             foreach (var movie in allMovies)
             {
-                // Just double check there is no associated request id
-                if (movie.RequestId.HasValue)
+                try
                 {
-                    continue;
-                }
-                var hasImdb = movie.ImdbId.HasValue();
-                var hasTheMovieDb = movie.TheMovieDbId.HasValue();
-                // Movies don't really use TheTvDb
-
-                if (!hasImdb)
-                {
-                    var imdbId = await GetImdbId(hasTheMovieDb, false, movie.Title, movie.TheMovieDbId, string.Empty, RequestType.Movie);
-                    if (imdbId.HasValue())
-                    {
-                        movie.ImdbId = imdbId;
-                        hasImdb = true;
-                        _plexRepo.UpdateWithoutSave(movie);
-                    }
-                }
-                if (!hasTheMovieDb)
-                {
-                    var id = await GetTheMovieDbId(false, hasImdb, string.Empty, movie.ImdbId, movie.Title, true);
-                    if (id.HasValue())
-                    {
-                        movie.TheMovieDbId = id;
-                        hasTheMovieDb = true;
-                        _plexRepo.UpdateWithoutSave(movie);
-                    }
-                }
-                if (!hasTheMovieDb || !hasImdb)
-                {
-                    // Check to see if the Plex item has anything
-                    if (!settings.Servers.Any())
+                    // Just double check there is no associated request id
+                    if (movie.RequestId.HasValue)
                     {
                         continue;
                     }
-                    var servers = settings.Servers[0];
-                    PlexMetadata metaData = null;
+                    var hasImdb = movie.ImdbId.HasValue();
+                    var hasTheMovieDb = movie.TheMovieDbId.HasValue();
+                    // Movies don't really use TheTvDb
 
-                    try
+                    if (!hasImdb)
                     {
-                        metaData = await _plexApi.GetMetadata(servers.PlexAuthToken, settings.Servers[0].FullUri, movie.Key);
-                    }
-                    catch (Exception e)
-                    {
-                        _log.LogError($"Could not find the metadata for title: '{movie.Title}', skipping");
-                        _log.LogDebug(e, $"Could not find the metadata for title: '{movie.Title}', skipping");
-                        continue;
-                    }
-                    var guids = new List<string>();
-
-                    var meta = metaData.MediaContainer.Metadata.FirstOrDefault();
-                    guids.Add(meta.guid);
-                    if (meta.Guid != null)
-                    {
-                        foreach (var g in meta.Guid)
+                        var imdbId = await GetImdbId(hasTheMovieDb, false, movie.Title, movie.TheMovieDbId, string.Empty, RequestType.Movie);
+                        if (imdbId.HasValue())
                         {
-                            guids.Add(g.Id);
-                        }
-                    }
-
-                    var providerIds = PlexHelper.GetProviderIdsFromMetadata(guids.ToArray());
-                    if (providerIds.Any())
-                    {
-                        if (providerIds.TheMovieDb.HasValue() && !hasTheMovieDb)
-                        {
-                            movie.TheMovieDbId = providerIds.TheMovieDb;
-                            _plexRepo.UpdateWithoutSave(movie);
-                        }
-                        if (providerIds.ImdbId.HasValue() && !hasImdb)
-                        {
-                            movie.ImdbId = providerIds.ImdbId;
+                            movie.ImdbId = imdbId;
+                            hasImdb = true;
                             _plexRepo.UpdateWithoutSave(movie);
                         }
                     }
+                    if (!hasTheMovieDb)
+                    {
+                        var id = await GetTheMovieDbId(false, hasImdb, string.Empty, movie.ImdbId, movie.Title, true);
+                        if (id.HasValue())
+                        {
+                            movie.TheMovieDbId = id;
+                            hasTheMovieDb = true;
+                            _plexRepo.UpdateWithoutSave(movie);
+                        }
+                    }
+                    if (!hasTheMovieDb || !hasImdb)
+                    {
+                        // Check to see if the Plex item has anything
+                        if (!settings.Servers.Any())
+                        {
+                            continue;
+                        }
+                        var servers = settings.Servers[0];
+                        PlexMetadata metaData = null;
+
+                        try
+                        {
+                            metaData = await _plexApi.GetMetadata(servers.PlexAuthToken, settings.Servers[0].FullUri, movie.Key);
+                        }
+                        catch (Exception e)
+                        {
+                            _log.LogError($"Could not find the metadata for title: '{movie.Title}', skipping");
+                            _log.LogDebug(e, $"Could not find the metadata for title: '{movie.Title}', skipping");
+                            continue;
+                        }
+                        var guids = new List<string>();
+
+                        var meta = metaData.MediaContainer.Metadata.FirstOrDefault();
+                        guids.Add(meta.guid);
+                        if (meta.Guid != null)
+                        {
+                            foreach (var g in meta.Guid)
+                            {
+                                guids.Add(g.Id);
+                            }
+                        }
+
+                        var providerIds = PlexHelper.GetProviderIdsFromMetadata(guids.ToArray());
+                        if (providerIds.Any())
+                        {
+                            if (providerIds.TheMovieDb.HasValue() && !hasTheMovieDb)
+                            {
+                                movie.TheMovieDbId = providerIds.TheMovieDb;
+                                _plexRepo.UpdateWithoutSave(movie);
+                            }
+                            if (providerIds.ImdbId.HasValue() && !hasImdb)
+                            {
+                                movie.ImdbId = providerIds.ImdbId;
+                                _plexRepo.UpdateWithoutSave(movie);
+                            }
+                        }
+                    }
+
                 }
-
+                catch (Exception e)
+                {
+                    _log.LogWarning(e, "Skipping metadata refresh for '{Title}' after an error; continuing with the rest of the pass", movie.Title);
+                }
+                if (++processed % SaveBatchSize == 0)
+                {
+                    await _plexRepo.SaveChangesAsync();
+                }
             }
-            // One save for the whole pass instead of one per movie.
+            // Saves happen every N items during the pass plus this final
+            // one, so one bad item or a restart never discards the whole
+            // pass.
             await _plexRepo.SaveChangesAsync();
         }
 
         private async Task StartEmbyMovies(EmbySettings settings)
         {
+            var processed = 0;
             var allMovies = await _embyRepo.GetAll().Where(x =>
                 x.Type == MediaType.Movie && (x.TheMovieDbId == null || x.ImdbId == null)).ToListAsync();
             foreach (var movie in allMovies)
             {
-                movie.ImdbId.HasValue();
-                movie.TheMovieDbId.HasValue();
-                // Movies don't really use TheTvDb
-
-                // Check if it even has 1 ID
-                if (!movie.HasImdb && !movie.HasTheMovieDb)
+                try
                 {
-                    // Ok this sucks,
-                    // The only think I can think that has happened is that we scanned Emby before Emby has got the metadata
-                    // So let's recheck emby to see if they have got the metadata now
-                    //
-                    // Yeah your right that does suck - Future Jamie
-                    _log.LogInformation($"Movie {movie.Title} does not have a ImdbId or TheMovieDbId, so rechecking emby");
-                    foreach (var server in settings.Servers)
+                    movie.ImdbId.HasValue();
+                    movie.TheMovieDbId.HasValue();
+                    // Movies don't really use TheTvDb
+
+                    // Check if it even has 1 ID
+                    if (!movie.HasImdb && !movie.HasTheMovieDb)
                     {
-                        _log.LogInformation($"Checking server {server.Name} for upto date metadata");
-                        var movieInfo = await EmbyApi.GetMovieInformation(movie.EmbyId, server.ApiKey, server.AdministratorId,
-                            server.FullUri);
-
-                        if (movieInfo.ProviderIds?.Imdb.HasValue() ?? false)
+                        // Ok this sucks,
+                        // The only think I can think that has happened is that we scanned Emby before Emby has got the metadata
+                        // So let's recheck emby to see if they have got the metadata now
+                        //
+                        // Yeah your right that does suck - Future Jamie
+                        _log.LogInformation($"Movie {movie.Title} does not have a ImdbId or TheMovieDbId, so rechecking emby");
+                        foreach (var server in settings.Servers)
                         {
-                            movie.ImdbId = movieInfo.ProviderIds.Imdb;
-                        }
+                            _log.LogInformation($"Checking server {server.Name} for upto date metadata");
+                            var movieInfo = await EmbyApi.GetMovieInformation(movie.EmbyId, server.ApiKey, server.AdministratorId,
+                                server.FullUri);
 
-                        if (movieInfo.ProviderIds?.Tmdb.HasValue() ?? false)
-                        {
-                            movie.TheMovieDbId = movieInfo.ProviderIds.Tmdb;
+                            if (movieInfo.ProviderIds?.Imdb.HasValue() ?? false)
+                            {
+                                movie.ImdbId = movieInfo.ProviderIds.Imdb;
+                            }
+
+                            if (movieInfo.ProviderIds?.Tmdb.HasValue() ?? false)
+                            {
+                                movie.TheMovieDbId = movieInfo.ProviderIds.Tmdb;
+                            }
                         }
                     }
-                }
 
-                if (!movie.HasImdb)
-                {
-                    var imdbId = await GetImdbId(movie.HasTheMovieDb, false, movie.Title, movie.TheMovieDbId, string.Empty, RequestType.Movie);
-                    movie.ImdbId = imdbId;
-                    _embyRepo.UpdateWithoutSave(movie);
-                }
-                if (!movie.HasTheMovieDb)
-                {
-                    var id = await GetTheMovieDbId(false, movie.HasImdb, string.Empty, movie.ImdbId, movie.Title, true);
-                    movie.TheMovieDbId = id;
-                    _embyRepo.UpdateWithoutSave(movie);
-                }
+                    if (!movie.HasImdb)
+                    {
+                        var imdbId = await GetImdbId(movie.HasTheMovieDb, false, movie.Title, movie.TheMovieDbId, string.Empty, RequestType.Movie);
+                        movie.ImdbId = imdbId;
+                        _embyRepo.UpdateWithoutSave(movie);
+                    }
+                    if (!movie.HasTheMovieDb)
+                    {
+                        var id = await GetTheMovieDbId(false, movie.HasImdb, string.Empty, movie.ImdbId, movie.Title, true);
+                        movie.TheMovieDbId = id;
+                        _embyRepo.UpdateWithoutSave(movie);
+                    }
 
+                }
+                catch (Exception e)
+                {
+                    _log.LogWarning(e, "Skipping metadata refresh for '{Title}' after an error; continuing with the rest of the pass", movie.Title);
+                }
+                if (++processed % SaveBatchSize == 0)
+                {
+                    await _embyRepo.SaveChangesAsync();
+                }
             }
-            // One save for the whole pass instead of one per movie.
+            // Saves happen every N items during the pass plus this final
+            // one, so one bad item or a restart never discards the whole
+            // pass.
             await _embyRepo.SaveChangesAsync();
         }
 
         private async Task StartJellyfinMovies(JellyfinSettings settings)
         {
+            var processed = 0;
             var allMovies = await _jellyfinRepo.GetAll().Where(x =>
                 x.Type == MediaType.Movie && (x.TheMovieDbId == null || x.ImdbId == null)).ToListAsync();
             foreach (var movie in allMovies)
             {
-                movie.ImdbId.HasValue();
-                movie.TheMovieDbId.HasValue();
-                // Movies don't really use TheTvDb
-
-                // Check if it even has 1 ID
-                if (!movie.HasImdb && !movie.HasTheMovieDb)
+                try
                 {
-                    // Ok this sucks,
-                    // The only think I can think that has happened is that we scanned Jellyfin before Jellyfin has got the metadata
-                    // So let's recheck jellyfin to see if they have got the metadata now
-                    //
-                    // Yeah your right that does suck - Future Jamie
-                    _log.LogInformation($"Movie {movie.Title} does not have a ImdbId or TheMovieDbId, so rechecking jellyfin");
-                    foreach (var server in settings.Servers)
+                    movie.ImdbId.HasValue();
+                    movie.TheMovieDbId.HasValue();
+                    // Movies don't really use TheTvDb
+
+                    // Check if it even has 1 ID
+                    if (!movie.HasImdb && !movie.HasTheMovieDb)
                     {
-                        _log.LogInformation($"Checking server {server.Name} for upto date metadata");
-                        var movieInfo = await JellyfinApi.GetMovieInformation(movie.JellyfinId, server.ApiKey, server.AdministratorId,
-                            server.FullUri);
-
-                        if (movieInfo.ProviderIds?.Imdb.HasValue() ?? false)
+                        // Ok this sucks,
+                        // The only think I can think that has happened is that we scanned Jellyfin before Jellyfin has got the metadata
+                        // So let's recheck jellyfin to see if they have got the metadata now
+                        //
+                        // Yeah your right that does suck - Future Jamie
+                        _log.LogInformation($"Movie {movie.Title} does not have a ImdbId or TheMovieDbId, so rechecking jellyfin");
+                        foreach (var server in settings.Servers)
                         {
-                            movie.ImdbId = movieInfo.ProviderIds.Imdb;
-                        }
+                            _log.LogInformation($"Checking server {server.Name} for upto date metadata");
+                            var movieInfo = await JellyfinApi.GetMovieInformation(movie.JellyfinId, server.ApiKey, server.AdministratorId,
+                                server.FullUri);
 
-                        if (movieInfo.ProviderIds?.Tmdb.HasValue() ?? false)
-                        {
-                            movie.TheMovieDbId = movieInfo.ProviderIds.Tmdb;
+                            if (movieInfo.ProviderIds?.Imdb.HasValue() ?? false)
+                            {
+                                movie.ImdbId = movieInfo.ProviderIds.Imdb;
+                            }
+
+                            if (movieInfo.ProviderIds?.Tmdb.HasValue() ?? false)
+                            {
+                                movie.TheMovieDbId = movieInfo.ProviderIds.Tmdb;
+                            }
                         }
                     }
-                }
 
-                if (!movie.HasImdb)
-                {
-                    var imdbId = await GetImdbId(movie.HasTheMovieDb, false, movie.Title, movie.TheMovieDbId, string.Empty, RequestType.Movie);
-                    movie.ImdbId = imdbId;
-                    _jellyfinRepo.UpdateWithoutSave(movie);
-                }
-                if (!movie.HasTheMovieDb)
-                {
-                    var id = await GetTheMovieDbId(false, movie.HasImdb, string.Empty, movie.ImdbId, movie.Title, true);
-                    movie.TheMovieDbId = id;
-                    _jellyfinRepo.UpdateWithoutSave(movie);
-                }
+                    if (!movie.HasImdb)
+                    {
+                        var imdbId = await GetImdbId(movie.HasTheMovieDb, false, movie.Title, movie.TheMovieDbId, string.Empty, RequestType.Movie);
+                        movie.ImdbId = imdbId;
+                        _jellyfinRepo.UpdateWithoutSave(movie);
+                    }
+                    if (!movie.HasTheMovieDb)
+                    {
+                        var id = await GetTheMovieDbId(false, movie.HasImdb, string.Empty, movie.ImdbId, movie.Title, true);
+                        movie.TheMovieDbId = id;
+                        _jellyfinRepo.UpdateWithoutSave(movie);
+                    }
 
+                }
+                catch (Exception e)
+                {
+                    _log.LogWarning(e, "Skipping metadata refresh for '{Title}' after an error; continuing with the rest of the pass", movie.Title);
+                }
+                if (++processed % SaveBatchSize == 0)
+                {
+                    await _jellyfinRepo.SaveChangesAsync();
+                }
             }
-            // One save for the whole pass instead of one per movie.
+            // Saves happen every N items during the pass plus this final
+            // one, so one bad item or a restart never discards the whole
+            // pass.
             await _jellyfinRepo.SaveChangesAsync();
         }
 
