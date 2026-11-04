@@ -172,8 +172,11 @@ namespace Ombi.Schedule.Jobs.Ombi
                     show.TvDbId = id;
                     _plexRepo.UpdateWithoutSave(show);
                 }
-                await _plexRepo.SaveChangesAsync();
             }
+            // One save for the whole pass instead of one per show. The
+            // network lookups above already happened outside any
+            // transaction; only this save opens one.
+            await _plexRepo.SaveChangesAsync();
         }
 
         private async Task StartEmbyTv()
@@ -206,9 +209,9 @@ namespace Ombi.Schedule.Jobs.Ombi
                     show.TvDbId = id;
                     _embyRepo.UpdateWithoutSave(show);
                 }
-
-                await _embyRepo.SaveChangesAsync();
             }
+            // One save for the whole pass instead of one per show.
+            await _embyRepo.SaveChangesAsync();
         }
 
         private async Task StartJellyfinTv()
@@ -241,9 +244,9 @@ namespace Ombi.Schedule.Jobs.Ombi
                     show.TvDbId = id;
                     _jellyfinRepo.UpdateWithoutSave(show);
                 }
-
-                await _jellyfinRepo.SaveChangesAsync();
             }
+            // One save for the whole pass instead of one per show.
+            await _jellyfinRepo.SaveChangesAsync();
         }
 
         private async Task StartPlexMovies(List<PlexServerContent> allMovies, PlexSettings settings)
@@ -327,8 +330,9 @@ namespace Ombi.Schedule.Jobs.Ombi
                     }
                 }
 
-                await _plexRepo.SaveChangesAsync();
             }
+            // One save for the whole pass instead of one per movie.
+            await _plexRepo.SaveChangesAsync();
         }
 
         private async Task StartEmbyMovies(EmbySettings settings)
@@ -381,9 +385,9 @@ namespace Ombi.Schedule.Jobs.Ombi
                     _embyRepo.UpdateWithoutSave(movie);
                 }
 
-                await _embyRepo.SaveChangesAsync();
-
             }
+            // One save for the whole pass instead of one per movie.
+            await _embyRepo.SaveChangesAsync();
         }
 
         private async Task StartJellyfinMovies(JellyfinSettings settings)
@@ -436,9 +440,9 @@ namespace Ombi.Schedule.Jobs.Ombi
                     _jellyfinRepo.UpdateWithoutSave(movie);
                 }
 
-                await _jellyfinRepo.SaveChangesAsync();
-
             }
+            // One save for the whole pass instead of one per movie.
+            await _jellyfinRepo.SaveChangesAsync();
         }
 
         public async Task<string> GetTheMovieDbId(bool hasTvDbId, bool hasImdb, string tvdbID, string imdbId, string title, bool movie)

@@ -307,6 +307,11 @@ namespace Ombi.Schedule.Jobs.Plex
                         if (count > 30)
                         {
                             await Repo.SaveChangesAsync();
+                            // The episode loop above resets its counter here;
+                            // the show loop did not, so after the 31st show
+                            // every subsequent show committed on its own and
+                            // the batching was effectively dead.
+                            count = 0;
                         }
                     }
 

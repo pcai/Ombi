@@ -129,8 +129,17 @@ namespace Ombi.Schedule.Jobs.Plex
             }
 
             var feature4kEnabled = await _featureService.FeatureEnabled(FeatureNames.Movie4KRequests);
-            // Get all non available
-            var movies = _movieRepo.GetAll().Include(x => x.RequestedUser).Where(x => !x.Available || (!x.Available4K && x.Has4KRequest));
+            // Get all non available. Materialized up front: the old code
+            // streamed this query while saving through the same context
+            // inside the loop, and saved up to twice per movie (4K branch
+            // plus quality branch). The Emby/Jellyfin checkers already do
+            // the batched shape -- mutate in the loop, one save at the end
+            // -- and this now matches them.
+            // Synchronous materialization on purpose: the old code
+            // enumerated this query synchronously, and ToListAsync throws
+            // on a non-async provider. The request table is small, and
+            // this keeps the change to the batching itself.
+            var movies = _movieRepo.GetAll().Include(x => x.RequestedUser).Where(x => !x.Available || (!x.Available4K && x.Has4KRequest)).ToList();
             var itemsForAvailbility = new List<AvailabilityModel>();
 
             foreach (var movie in movies)
@@ -164,7 +173,6 @@ namespace Ombi.Schedule.Jobs.Plex
                     movie.Available4K = true;
                     movie.Approved4K = true;
                     movie.MarkedAsAvailable4K = DateTime.Now;
-                    await _movieRepo.SaveChangesAsync();
                     notify = true;
                 }
 
@@ -172,7 +180,6 @@ namespace Ombi.Schedule.Jobs.Plex
                 {
                     movie.Available = true;
                     movie.MarkedAsAvailable = DateTime.Now;
-                    await _movieRepo.SaveChangesAsync();
                     notify = true;
                 }
 
@@ -182,7 +189,6 @@ namespace Ombi.Schedule.Jobs.Plex
                     movie.Available = true;
                     movie.Approved = true;
                     movie.MarkedAsAvailable = DateTime.Now;
-                    await _movieRepo.SaveChangesAsync();
                     notify = true;
                 }
 
@@ -195,6 +201,11 @@ namespace Ombi.Schedule.Jobs.Plex
                     });
                 }
             }
+
+            // One transaction for the whole run instead of one (or two)
+            // per movie. Notifications still go out after the save, as
+            // before, so a failed save notifies nothing.
+            await _movieRepo.SaveChangesAsync();
 
             foreach (var i in itemsForAvailbility.DistinctBy(x => x.Id))
             {

@@ -94,9 +94,13 @@ namespace Ombi.Schedule.Jobs.Radarr
                         movieRequest.Available = true;
                         movieRequest.MarkedAsAvailable = DateTime.UtcNow;
                     }
-                    await _movies.SaveChangesAsync();
                 }
             }
+
+            // One save for the whole run instead of one per matched movie,
+            // as in PlexAvailabilityChecker. Notifications still go out
+            // after the save, as before.
+            await _movies.SaveChangesAsync();
 
             if (itemsForAvailability.Any())
             {
