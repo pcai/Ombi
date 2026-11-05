@@ -202,13 +202,13 @@ namespace Ombi.Extensions
 
             public override InterceptionResult ConnectionClosing(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
             {
-                Optimize(connection);
+                Optimize(connection, LoggerFor(eventData.Context));
                 return base.ConnectionClosing(connection, eventData, result);
             }
 
             public override async ValueTask<InterceptionResult> ConnectionClosingAsync(DbConnection connection, ConnectionEventData eventData, InterceptionResult result)
             {
-                Optimize(connection);
+                Optimize(connection, LoggerFor(eventData.Context));
                 return await base.ConnectionClosingAsync(connection, eventData, result);
             }
 
@@ -266,20 +266,46 @@ namespace Ombi.Extensions
                 }
             }
 
-            private static void Optimize(DbConnection connection)
+            private static void Optimize(DbConnection connection, ILogger logger)
             {
                 // Keep planner statistics fresh so index choices do not go
                 // stale as tables grow; PRAGMA optimize is designed to run
                 // on close and does real work only when statistics are
-                // missing or outdated. Best-effort like ApplyPragmas.
+                // missing or outdated. Best-effort like ApplyPragmas, but
+                // with a hard bound on how long it may wait: when a table
+                // lacks statistics, optimize runs ANALYZE for it, and
+                // ANALYZE needs the write lock. If another connection
+                // holds that lock, the wait runs to the ADO.NET command
+                // timeout (60 seconds with Ombi's Default Timeout=60),
+                // not the busy timeout — measured 30 seconds with
+                // busy_timeout=5000 and with 0 alike, failing with
+                // "database is locked" — so a read stalls for a full
+                // minute behind a writer, and EF Core closes the
+                // connection after every operation, so a sync doing two
+                // queries can stall twice (120 seconds measured). The
+                // stall is intermittent by design: optimize only
+                // considers a table the connection has queried by index
+                // (verified: an index-using read flips optimize(-1) from
+                // empty to ANALYZE, and the close then blocks), so a
+                // connection that only scanned closes instantly while one
+                // that used an index stalls. The command therefore
+                // carries its own 2 second timeout: the ANALYZE work
+                // itself is 0.03 seconds at 100k rows, so 2 seconds
+                // leaves ample headroom for realistic libraries, and a
+                // timed-out attempt just leaves the statistics as they
+                // were — the next close retries.
                 try
                 {
                     using var command = connection.CreateCommand();
+                    command.CommandTimeout = 2;
                     command.CommandText = "PRAGMA optimize;";
                     command.ExecuteNonQuery();
                 }
-                catch (DbException)
+                catch (DbException e)
                 {
+                    // A skipped optimize is expected under contention,
+                    // not a problem: log it at Debug, never fail the close.
+                    logger?.LogDebug(e, "SQLite PRAGMA optimize skipped for {DataSource}", connection.DataSource);
                 }
             }
         }
