@@ -77,6 +77,27 @@ namespace Ombi.Schedule.Tests
         }
 
         [Test]
+        public async Task ProcessEpsiodes_WithSharedKeySet_ShouldNotReAddEpisodesAlreadyInDatabase()
+        {
+            // Regression: both real callers pass a fresh, empty shared
+            // set, and the old code only loaded the keys from the
+            // database when the set was null, so an empty set meant
+            // every already-known episode was re-added on every sync.
+            // The load must populate the shared set itself.
+            var sharedKeys = new HashSet<(string Key, string GrandparentKey)>();
+            var currentEpisodes = ExistingEpisodes();
+
+            var added = await _subject.ProcessEpsiodes(new[] { Episode("1", "10") }, currentEpisodes, sharedKeys);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(added, Is.Empty);
+                Assert.That(_addedBatches[0], Is.Empty);
+                Assert.That(sharedKeys, Does.Contain(("1", "10")));
+            });
+        }
+
+        [Test]
         public async Task ProcessEpsiodes_WithoutSharedKeySet_ShouldReloadKeysOnEveryCall()
         {
             // No shared set: each call loads the keys from the queryable,

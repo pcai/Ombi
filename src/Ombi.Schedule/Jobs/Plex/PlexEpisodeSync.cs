@@ -163,11 +163,39 @@ namespace Ombi.Schedule.Jobs.Plex
                 // saw them at the next batch); there is no unique
                 // constraint on episode keys, so the worst case is a
                 // duplicate row, not a failed sync.
-                var existingKeys = sharedKeys ?? (await currentEpisodes
-                    .Select(x => new { x.Key, x.GrandparentKey })
-                    .ToListAsync())
-                    .Select(x => (x.Key, x.GrandparentKey))
-                    .ToHashSet();
+                //
+                // Both real callers pass a fresh, empty set, so "empty"
+                // cannot mean "loaded and the table is empty": an empty
+                // shared set is loaded from the database into the set
+                // itself on first use. Loading into the passed set (not
+                // a local copy) is what makes later batches see the
+                // load: once loaded, the set is non-empty whenever the
+                // table has rows, so it still loads once per sync, not
+                // once per batch. The only case that reloads per batch
+                // is an empty episode table, where the load is a
+                // zero-row query.
+                HashSet<(string Key, string GrandparentKey)> existingKeys;
+                if (sharedKeys == null)
+                {
+                    existingKeys = (await currentEpisodes
+                        .Select(x => new { x.Key, x.GrandparentKey })
+                        .ToListAsync())
+                        .Select(x => (x.Key, x.GrandparentKey))
+                        .ToHashSet();
+                }
+                else
+                {
+                    existingKeys = sharedKeys;
+                    if (existingKeys.Count == 0)
+                    {
+                        foreach (var key in await currentEpisodes
+                            .Select(x => new { x.Key, x.GrandparentKey })
+                            .ToListAsync())
+                        {
+                            existingKeys.Add((key.Key, key.GrandparentKey));
+                        }
+                    }
+                }
 
                 foreach (var episode in episodes)
                 {
